@@ -77,7 +77,10 @@ func New() Model {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.innerWidth = width - 4
+	m.width = width
+	m.height = height
+    // Reserve 1 column for scrollbar
+	m.innerWidth = width - 5
 	m.innerHeight = height - 6
 	if m.innerWidth < 1 {
 		m.innerWidth = 1
@@ -141,6 +144,11 @@ func (m Model) Status() model.SessionStatus {
 	return m.status
 }
 
+// IsScrolled returns whether the viewport is scrolled up (not at bottom).
+func (m Model) IsScrolled() bool {
+    return m.scrollOffset > 0
+}
+
 // AppendOutput feeds PTY output to the terminal emulator.
 func (m *Model) AppendOutput(data []byte) {
 	if len(data) == 0 || m.term == nil {
@@ -188,10 +196,10 @@ func (m *Model) HandleKey(key string) bool {
 		m.scrollBy(-m.innerHeight)
 		return true
 	case "shift+up":
-		m.scrollBy(m.innerHeight)
+		m.scrollBy(1)
 		return true
 	case "shift+down":
-		m.scrollBy(-m.innerHeight)
+		m.scrollBy(-1)
 		return true
 	case "home":
 		m.scrollOffset = m.maxScrollOffset()
@@ -199,6 +207,13 @@ func (m *Model) HandleKey(key string) bool {
 	case "end":
 		m.scrollOffset = 0
 		return true
+    case "esc":
+        // Snap to bottom on Escape if scrolled
+        if m.scrollOffset > 0 {
+            m.scrollOffset = 0
+            return true
+        }
+        return false
 	}
 	return false
 }
@@ -267,6 +282,10 @@ func (m Model) View() string {
 	}
 
 	// Build panel
+	// Build panel
+    // Combine content with scrollbar
+    mainArea := lipgloss.JoinHorizontal(lipgloss.Top, content, m.renderScrollbar())
+
 	panel := borderStyle.
 		Width(m.width - 2).
 		Height(m.height - 2).
@@ -274,10 +293,79 @@ func (m Model) View() string {
 			lipgloss.Left,
 			header,
 			strings.Repeat("─", innerWidth),
-			content,
+			mainArea,
 		))
 
 	return panel
+}
+
+func (m *Model) renderScrollbar() string {
+    height := m.innerHeight
+    if height < 1 {
+        return ""
+    }
+    
+    // Total lines available (history + current screen height approximately)
+    // We estimate total by scrollback lines + screen height.
+    lines := m.renderScrollLines()
+    totalLines := len(lines)
+    if totalLines < height {
+        totalLines = height
+    }
+    
+    // Viewport start position (0 = top of history)
+    // m.scrollOffset is distance from BOTTOM.
+    // So top index = totalLines - height - m.scrollOffset
+    
+    // Simplification:
+    // Pct = (total - height - offset) / (total - height)  [for top of thumb]
+    
+    if m.scrollOffset == 0 {
+        // At bottom, full bar or just empty? 
+        // Typically terminals show a bar at 100%.
+        // Or we can hide it if no scrollback.
+        if len(lines) <= height {
+             return strings.Repeat(" ", height) 
+        }
+    }
+
+    // Determine thumb size and position
+    // thumbHeight / height = height / totalLines
+    thumbHeight := int(float64(height) * float64(height) / float64(totalLines))
+    if thumbHeight < 1 {
+        thumbHeight = 1
+    }
+    
+    // Position
+    // maxScroll = totalLines - height
+    // currentScroll = maxScroll - m.scrollOffset
+    // pos = currentScroll / maxScroll * (height - thumbHeight)
+    
+    maxScroll := totalLines - height
+    if maxScroll < 1 { 
+         return strings.Repeat("│", height)
+    }
+    
+    currentScroll := maxScroll - m.scrollOffset
+    if currentScroll < 0 { currentScroll = 0 }
+    if currentScroll > maxScroll { currentScroll = maxScroll }
+    
+    availableTrack := height - thumbHeight
+    yPos := int(float64(currentScroll) / float64(maxScroll) * float64(availableTrack))
+    
+    var b strings.Builder
+    for i := 0; i < height; i++ {
+        if i >= yPos && i < yPos+thumbHeight {
+            b.WriteString("█") // Thumb
+        } else {
+            b.WriteString("│") // Track
+        }
+        if i < height-1 {
+            b.WriteByte('\n')
+        }
+    }
+    
+    return lipgloss.NewStyle().Foreground(styles.StatusIdle).Render(b.String())
 }
 
 func (m *Model) renderScreen() string {

@@ -104,7 +104,11 @@ func splitCommandLine(input string) ([]string, error) {
 			current.WriteRune(r)
 			escaped = false
 		case r == '\\':
-			escaped = true
+			if runtime.GOOS == "windows" {
+				current.WriteRune(r)
+			} else {
+				escaped = true
+			}
 		case quote != 0:
 			if r == quote {
 				quote = 0

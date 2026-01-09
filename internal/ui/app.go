@@ -265,7 +265,17 @@ func (a *App) startSession(project *model.Project) tea.Cmd {
 		}
 
 		// Create session
-		_, err = a.engine.CreateSession(a.ctx, project, profile)
+        // Get initial dimensions from the terminal instance if it exists
+        rows := 24
+        cols := 80
+        if inst, ok := a.terminals[project.ID]; ok {
+            w, h := inst.Terminal.PTYSize()
+            if w > 0 && h > 0 {
+                cols = w
+                rows = h
+            }
+        }
+		_, err = a.engine.CreateSession(a.ctx, project, profile, rows, cols)
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}

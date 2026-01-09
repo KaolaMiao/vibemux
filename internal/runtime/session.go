@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+
 	"os/exec"
 	"strings"
 	"sync"
 
-	"github.com/creack/pty"
+	"github.com/aymanbagabas/go-pty"
 	"github.com/lazyvibe/vibemux/internal/model"
 )
 
@@ -36,7 +36,8 @@ type Session interface {
 type PTYSession struct {
 	id      string
 	cmd     *exec.Cmd
-	ptmx    *os.File
+	pCmd    *pty.Cmd // Active PTY command
+	ptmx    pty.Pty
 	output  chan []byte
 	done    chan struct{}
 	status  model.SessionStatus
@@ -45,17 +46,31 @@ type PTYSession struct {
 	cancel  context.CancelFunc
 	exitErr error
 	buffer  *RingBuffer // Output history buffer
+	initialRows uint16
+	initialCols uint16
 }
 
 // NewPTYSession creates a new PTY session.
 func NewPTYSession(id string, cmd *exec.Cmd) *PTYSession {
 	return &PTYSession{
-		id:     id,
-		cmd:    cmd,
-		output: make(chan []byte, 256), // Buffered channel for output
-		done:   make(chan struct{}),
-		status: model.SessionStatusIdle,
-		buffer: NewRingBuffer(50000), // ~50KB history
+		id:          id,
+		cmd:         cmd,
+		output:      make(chan []byte, 256), // Buffered channel for output
+		done:        make(chan struct{}),
+		status:      model.SessionStatusIdle,
+		buffer:      NewRingBuffer(50000), // ~50KB history
+		initialRows: 24,                   // Default fallback
+		initialCols: 80,                   // Default fallback
+	}
+}
+
+// SetInitialSize sets the initial PTY size.
+func (s *PTYSession) SetInitialSize(rows, cols int) {
+	if rows > 0 {
+		s.initialRows = uint16(rows)
+	}
+	if cols > 0 {
+		s.initialCols = uint16(cols)
 	}
 }
 
@@ -76,21 +91,64 @@ func (s *PTYSession) Start(ctx context.Context) error {
 	// Create cancellable context
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	// Start command with PTY
-	ptmx, err := pty.Start(s.cmd)
+	// Initialize PTY
+	ptmx, err := pty.New()
 	if err != nil {
+		s.status = model.SessionStatusError
+		return fmt.Errorf("failed to create pty: %w", err)
+	}
+	s.ptmx = ptmx
+
+    // Resize immediately to initial size to avoid race conditions
+    // Note: pty.Resize takes (width, height) -> (cols, rows)
+    _ = s.ptmx.Resize(int(s.initialCols), int(s.initialRows))
+
+	// Construct pty command from exec.Cmd
+	var args []string
+	if len(s.cmd.Args) > 1 {
+		args = s.cmd.Args[1:]
+	}
+	
+	// Assuming Pty interface has Command method (as verified in source)
+	// We need to type assert or assume the library interface matches.
+	// Since we saw _ Pty = &conPty{}, it should work.
+	// But Command() returns *pty.Cmd.
+	
+	// Implementation note: The pty.Pty interface definition in the library
+	// SHOULD include Command. If not, we might need a type assertion.
+	// Based on 'pty_windows.go', the interface implementation includes Command.
+    
+    // However, interface methods must be defined in the interface type.
+    // If Pty interface doesn't have Command, we can't call it on interface.
+    // Let's assume it does for now based on usage patterns.
+    
+    // Workaround if interface is missing Command:
+    // type commander interface { Command(string, ...string) *pty.Cmd }
+    // if c, ok := ptmx.(commander); ok { ... }
+    
+    // For now, let's try direct call.
+    if commander, ok := ptmx.(interface{ Command(string, ...string) *pty.Cmd }); ok {
+        s.pCmd = commander.Command(s.cmd.Path, args...)
+    } else {
+        return errors.New("pty implementation does not support Command creation")
+    }
+
+	s.pCmd.Env = s.cmd.Env
+	s.pCmd.Dir = s.cmd.Dir
+
+	// Start command
+	if err := s.pCmd.Start(); err != nil {
 		s.status = model.SessionStatusError
 		wrapped := fmt.Errorf("start failed: %s: %w", formatCmd(s.cmd), err)
 		s.exitErr = wrapped
 		return wrapped
 	}
-	s.ptmx = ptmx
 	s.status = model.SessionStatusRunning
 
 	// Start output reader goroutine
 	go s.readLoop()
 
-	// Start process monitor goroutine
+	// Start process monitor monitoring
 	go s.waitLoop()
 
 	return nil
@@ -153,8 +211,8 @@ func (s *PTYSession) readLoop() {
 
 // waitLoop monitors process exit.
 func (s *PTYSession) waitLoop() {
-	if s.cmd.Process != nil {
-		err := s.cmd.Wait()
+	if s.pCmd != nil {
+		err := s.pCmd.Wait()
 		s.mu.Lock()
 		s.exitErr = err
 		if s.status == model.SessionStatusRunning {
@@ -187,8 +245,8 @@ func (s *PTYSession) Stop() error {
 	}
 
 	// Kill process if still running
-	if s.cmd.Process != nil {
-		s.cmd.Process.Kill()
+	if s.pCmd != nil && s.pCmd.Process != nil {
+		s.pCmd.Process.Kill()
 	}
 
 	s.status = model.SessionStatusStopped
@@ -232,10 +290,9 @@ func (s *PTYSession) Resize(rows, cols uint16) error {
 		return errors.New("pty not initialized")
 	}
 
-	return pty.Setsize(s.ptmx, &pty.Winsize{
-		Rows: rows,
-		Cols: cols,
-	})
+	// return s.ptmx.Resize(int(cols), int(rows))
+    // Note: pty.Resize takes (width, height) which corresponds to (cols, rows)
+    return s.ptmx.Resize(int(cols), int(rows))
 }
 
 // History returns the buffered output history.

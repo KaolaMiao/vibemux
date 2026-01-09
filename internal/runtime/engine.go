@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+    "path/filepath"
+    "fmt"
 	"sync"
 
 	"github.com/lazyvibe/vibemux/internal/model"
@@ -13,7 +15,7 @@ import (
 // Engine manages PTY sessions for multiple projects.
 type Engine interface {
 	// CreateSession creates and starts a new session for a project.
-	CreateSession(ctx context.Context, project *model.Project, profile *model.Profile) (Session, error)
+	CreateSession(ctx context.Context, project *model.Project, profile *model.Profile, rows, cols int) (Session, error)
 	// GetSession retrieves an existing session by project ID.
 	GetSession(projectID string) (Session, bool)
 	// ListSessions returns all active sessions.
@@ -45,7 +47,7 @@ func NewEngineWithConfig(cfg driver.Config) *DefaultEngine {
 }
 
 // CreateSession creates and starts a new PTY session.
-func (e *DefaultEngine) CreateSession(ctx context.Context, project *model.Project, profile *model.Profile) (Session, error) {
+func (e *DefaultEngine) CreateSession(ctx context.Context, project *model.Project, profile *model.Profile, rows, cols int) (Session, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -71,6 +73,32 @@ func (e *DefaultEngine) CreateSession(ctx context.Context, project *model.Projec
 		return nil, errors.New("project path not found: " + project.Path)
 	}
 
+	// Inject CLAUDE_CONFIG_DIR for isolation if not present
+    // We isolate by Project ID to ensure multiple projects don't conflict
+    sessionConfigDir := filepath.Join(os.Getenv("USERPROFILE"), ".config", "vibemux", "sessions", project.ID)
+    if err := os.MkdirAll(sessionConfigDir, 0755); err != nil {
+        return nil, fmt.Errorf("failed to create session config dir: %w", err)
+    }
+    
+    // Copy the existing EnvVars to avoid mutating the original profile
+    if profile.EnvVars == nil {
+        profile.EnvVars = make(map[string]string)
+    } else {
+        // Deep copy needed if we reuse profile pointer, but profile here comes from caller. 
+        // To be safe, we can just modify the map if the caller (UI) doesn't reuse it for other sessions.
+        // Or we can create a temporary profile clone.
+        newEnv := make(map[string]string)
+        for k, v := range profile.EnvVars {
+            newEnv[k] = v
+        }
+        profile.EnvVars = newEnv
+    }
+    
+    // Only set if not already set by user
+    if _, ok := profile.EnvVars["CLAUDE_CONFIG_DIR"]; !ok {
+        profile.EnvVars["CLAUDE_CONFIG_DIR"] = sessionConfigDir
+    }
+
 	// Build command
 	cmd, err := d.BuildCommand(project.Path, profile)
 	if err != nil {
@@ -79,6 +107,9 @@ func (e *DefaultEngine) CreateSession(ctx context.Context, project *model.Projec
 
 	// Create session
 	session := NewPTYSession(project.ID, cmd)
+    if rows > 0 && cols > 0 {
+        session.SetInitialSize(rows, cols)
+    }
 
 	// Start session
 	if err := session.Start(ctx); err != nil {

@@ -70,9 +70,18 @@ func (d *NativeDriver) BuildCommand(workDir string, profile *model.Profile) (*ex
 	// Merge environment variables
 	// Start with current environment, then overlay profile-specific vars
 	env := os.Environ()
+    // Explicitly set TERM to xterm-256color if not present in profile vars (to ensure TUI apps work)
+    hasTerm := false
 	for k, v := range profile.EnvVars {
 		env = append(env, k+"="+v)
+        if k == "TERM" {
+            hasTerm = true
+        }
 	}
+    if !hasTerm {
+        env = append(env, "TERM=xterm-256color")
+        env = append(env, "COLORTERM=truecolor")
+    }
 	cmd.Env = env
 
 	return cmd, nil

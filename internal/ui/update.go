@@ -65,6 +65,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle pane-specific keys
 		return a.handlePaneKeys(msg)
 
+    case tea.MouseMsg:
+        if msg.Type == tea.MouseWheelUp {
+            if inst, ok := a.terminals[a.activeTermID]; ok {
+                inst.Terminal.HandleKey("shift+up")
+            }
+        } else if msg.Type == tea.MouseWheelDown {
+             if inst, ok := a.terminals[a.activeTermID]; ok {
+                inst.Terminal.HandleKey("shift+down")
+            }
+        }
+        return a, nil
+
 	case ProjectsLoadedMsg:
 		if msg.Err == nil {
 			a.projects = msg.Projects
@@ -592,6 +604,52 @@ func (a App) handleTerminalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if a.imeBuffer.HasContent() {
 				session.Write(a.imeBuffer.Flush())
 			}
+
+			// Handle special keys for local scrolling
+			// We support Ctrl+PgUp/PgDown as they are defined in bubbletea
+			switch msg.Type {
+			case tea.KeyCtrlPgUp:
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("pgup")
+				}
+				return a, nil
+			case tea.KeyCtrlPgDown:
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("pgdown")
+				}
+				return a, nil
+            // Support Shift+Up/Down for line-by-line scrolling (laptop friendly)
+            case tea.KeyShiftUp:
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("shift+up")
+				}
+				return a, nil
+            case tea.KeyShiftDown:
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("shift+down")
+				}
+				return a, nil
+            case tea.KeyEscape:
+                if inst, ok := a.terminals[a.activeTermID]; ok && inst.Terminal.IsScrolled() {
+                    inst.Terminal.HandleKey("esc")
+                    return a, nil
+                }
+			}
+            
+            // Fallback for Shift+PgUp/PgDown if supported via string
+            if msg.String() == "shift+pgup" {
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("pgup")
+				}
+				return a, nil
+            }
+            if msg.String() == "shift+pgdown" {
+				if inst, ok := a.terminals[a.activeTermID]; ok {
+					inst.Terminal.HandleKey("pgdown")
+				}
+				return a, nil
+            }
+
 
 			// Send key to PTY
 			input := keyToBytes(msg)

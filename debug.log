@@ -1,0 +1,19 @@
+[?25l[?1049h[2J[H[?25l[?2004h[H⚡ Loading VibeMux...[1;H[H                            session           
+                                 or press 'a' 
+                       to add a new project   
+                                              
+                                              
+                              v0.1.0          
+ VibeMux  CTRL F12:term Tab:switch            
+Enter:run/term a:add p:profiles d:delete      
+x:close ←/→:pane ↑/↓:pane Shift+↑/↓:page      
+q:quit                                        [10;H[H                        Select a project and press 
+                      Enter to start a session     
+                                or press 'a' to add
+                       a new project               
+                                                   
+                                                   
+                    v0.1.0                         
+ VibeMux  CTRL F12:term Tab:switch Enter:run/term  
+a:add p:profiles d:delete x:close ←/→:pane ↑/↓:pane
+Shift+↑/↓:page q:quit                              [10;H

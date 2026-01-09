@@ -73,6 +73,7 @@ func main() {
 	p := tea.NewProgram(
 		application,
 		tea.WithAltScreen(),       // Use alternate screen buffer
+        tea.WithMouseCellMotion(), // Enable mouse support
 	)
 
 	if _, err := p.Run(); err != nil {
