@@ -71,12 +71,18 @@ VibeMux enables developers to:
 - Some ANSI escape sequences may render differently
 - Terminal scrollback with nested TUI applications (like Claude Code) may show rendering artifacts
 
+> [!WARNING]
+> **Cross-Platform Compatibility Notice**
+> 
+> As VibeMux is being actively optimized for Windows, some changes may temporarily affect functionality on macOS and Linux systems. We are working to ensure compatibility across all platforms, but please report any issues you encounter on non-Windows systems.
+
 ### 🎯 Planned Improvements
 
 - [ ] Further optimize terminal rendering performance
 - [ ] Enhanced Windows terminal compatibility
 - [ ] Improved error messages for Windows-specific issues
 - [ ] Native Windows installer/package
+- [ ] Ensure cross-platform compatibility and testing
 
 For detailed technical optimizations and implementation notes, see development logs in the project repository.
 
@@ -137,18 +143,21 @@ go build -o bin/vibemux
 
 ## Keyboard Shortcuts
 
-| Key | Mode | Action |
-|-----|------|--------|
-| `Tab` / `Shift+Tab` | Control | Cycle focus between panes |
-| `h/j/k/l` or Arrow Keys | Control | Navigate within panes |
-| `PgUp` / `PgDn` | Control | Scroll terminal page |
-| `Enter` | Control | Start session / Enter terminal mode |
-| `F12` | Any | Toggle Control/Terminal mode |
-| `a` | Control | Add new project |
-| `d` | Control | Delete selected project |
-| `p` | Control | Open Profile Manager |
-| `x` | Control | Close current session |
-| `q` | Control | Quit VibeMux |
+> [!NOTE]
+> Some shortcuts may behave differently on Windows compared to macOS/Linux due to platform-specific terminal handling.
+
+| Key | Mode | Action | Notes |
+|-----|------|--------|-------|
+| `Tab` / `Shift+Tab` | Control | Cycle focus between panes | |
+| `h/j/k/l` or Arrow Keys | Control | Navigate within panes | |
+| `PgUp` / `PgDn` | Control | Scroll terminal page | May vary on Windows |
+| `Enter` | Control | Start session / Enter terminal mode | |
+| `F12` | Any | Toggle Control/Terminal mode | |
+| `a` | Control | Add new project | |
+| `d` | Control | Delete selected project | |
+| `p` | Control | Open Profile Manager | |
+| `x` | Control | Close current session | |
+| `q` | Control | Quit VibeMux | |
 
 ## Configuration
 
@@ -263,12 +272,18 @@ VibeMux 让开发者能够：
 - 部分 ANSI 转义序列可能渲染效果不同
 - 嵌套 TUI 应用（如 Claude Code）的终端回看可能出现渲染残影
 
+> [!WARNING]
+> **跨平台兼容性提示**
+> 
+> 由于 VibeMux 正在针对 Windows 进行积极优化，部分改动可能会暂时影响 macOS 和 Linux 系统上的功能。我们正在努力确保所有平台的兼容性，如果你在非 Windows 系统上遇到问题，请及时反馈。
+
 ### 🎯 计划改进
 
 - [ ] 进一步优化终端渲染性能
 - [ ] 增强 Windows 终端兼容性
 - [ ] 改进 Windows 特定问题的错误提示
 - [ ] 提供原生 Windows 安装包
+- [ ] 确保跨平台兼容性和测试
 
 详细的技术优化和实现说明请参考项目仓库中的开发日志。
 
@@ -329,18 +344,21 @@ go build -o bin/vibemux
 
 ## 快捷键
 
-| 按键 | 模式 | 操作 |
-|------|------|------|
-| `Tab` / `Shift+Tab` | 控制 | 在窗格间循环焦点 |
-| `h/j/k/l` 或方向键 | 控制 | 窗格内导航 |
-| `PgUp` / `PgDn` | 控制 | 滚动终端内容 |
-| `Enter` | 控制 | 启动会话 / 进入终端模式 |
-| `F12` | 任意 | 切换控制/终端模式 |
-| `a` | 控制 | 添加新项目 |
-| `d` | 控制 | 删除选中项目 |
-| `p` | 控制 | 打开配置管理器 |
-| `x` | 控制 | 关闭当前会话 |
-| `q` | 控制 | 退出 VibeMux |
+> [!NOTE]
+> 由于不同平台的终端处理机制差异，部分快捷键在 Windows 和 macOS/Linux 上的表现可能不同。
+
+| 按键 | 模式 | 操作 | 备注 |
+|------|------|------|------|
+| `Tab` / `Shift+Tab` | 控制 | 在窗格间循环焦点 | |
+| `h/j/k/l` 或方向键 | 控制 | 窗格内导航 | |
+| `PgUp` / `PgDn` | 控制 | 滚动终端内容 | Windows 上可能有差异 |
+| `Enter` | 控制 | 启动会话 / 进入终端模式 | |
+| `F12` | 任意 | 切换控制/终端模式 | |
+| `a` | 控制 | 添加新项目 | |
+| `d` | 控制 | 删除选中项目 | |
+| `p` | 控制 | 打开配置管理器 | |
+| `x` | 控制 | 关闭当前会话 | |
+| `q` | 控制 | 退出 VibeMux | |
 
 ## 配置
 
