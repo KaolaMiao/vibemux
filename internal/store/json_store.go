@@ -82,13 +82,22 @@ func (s *JSONStore) load() error {
 	return nil
 }
 
-// save writes data to the JSON file.
+// save 将数据写入 JSON 文件。
+// 使用原子写入策略：先写入临时文件，再原子性重命名，防止写入中断导致配置损坏。
 func (s *JSONStore) save() error {
 	content, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, content, 0644)
+	
+	// 原子写入：先写临时文件，再重命名
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+		return err
+	}
+	
+	// os.Rename 在同一文件系统上是原子操作
+	return os.Rename(tmpPath, s.path)
 }
 
 // Close persists any pending changes.

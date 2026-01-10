@@ -82,6 +82,17 @@ func (d *NativeDriver) BuildCommand(workDir string, profile *model.Profile) (*ex
         env = append(env, "TERM=xterm-256color")
         env = append(env, "COLORTERM=truecolor")
     }
+    // Auto-inject NODE_OPTIONS to prevent Node.js heap OOM crashes
+    hasNodeOptions := false
+    for _, e := range env {
+        if len(e) > 12 && e[:12] == "NODE_OPTIONS" {
+            hasNodeOptions = true
+            break
+        }
+    }
+    if !hasNodeOptions {
+        env = append(env, "NODE_OPTIONS=--max-old-space-size=4096")
+    }
 	cmd.Env = env
 
 	return cmd, nil

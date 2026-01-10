@@ -60,6 +60,8 @@ type Model struct {
 	scrollback   []string
 	scrollTail   string
 	scrollOffset int
+	isAltScreen  bool // Track if terminal is in Alt Screen mode (TUI app running)
+	manualScrollbackPause bool // Manual toggle to stop recording history
 }
 
 // New creates a new terminal component.
@@ -154,8 +156,28 @@ func (m *Model) AppendOutput(data []byte) {
 	if len(data) == 0 || m.term == nil {
 		return
 	}
+	
+	// Track Alt Screen Mode to prevent "Ghost Frames" in history
+	// TUI apps (vim, htop, etc.) use Alt Screen. We shouldn't record their screen updates into scrollback.
+	strData := string(data)
+	if strings.Contains(strData, "\x1b[?1049h") || 
+	   strings.Contains(strData, "\x1b[?1047h") || 
+	   strings.Contains(strData, "\x1b[?47h") {
+		m.isAltScreen = true
+	}
+	if strings.Contains(strData, "\x1b[?1049l") || 
+	   strings.Contains(strData, "\x1b[?1047l") || 
+	   strings.Contains(strData, "\x1b[?47l") {
+		m.isAltScreen = false
+	}
+
 	_, _ = m.term.Write(data)
-	m.appendScrollback(data)
+	
+	// Only append to scrollback if NOT in Alt Screen mode AND NOT manually paused
+	// This keeps the history clean (linear logs only) and saves tokens.
+	if !m.isAltScreen && !m.manualScrollbackPause {
+		m.appendScrollback(data)
+	}
 }
 
 // SetContent replaces the terminal content.
@@ -196,10 +218,10 @@ func (m *Model) HandleKey(key string) bool {
 		m.scrollBy(-m.innerHeight)
 		return true
 	case "shift+up":
-		m.scrollBy(1)
+		m.scrollBy(3) // smoother scroll (3 lines)
 		return true
 	case "shift+down":
-		m.scrollBy(-1)
+		m.scrollBy(-3) // smoother scroll (3 lines)
 		return true
 	case "home":
 		m.scrollOffset = m.maxScrollOffset()
@@ -214,6 +236,9 @@ func (m *Model) HandleKey(key string) bool {
             return true
         }
         return false
+	case "alt+s":
+		m.manualScrollbackPause = !m.manualScrollbackPause
+		return true
 	}
 	return false
 }
@@ -233,6 +258,9 @@ func (m Model) View() string {
 	title := "Terminal"
 	if m.projectName != "" {
 		title = m.projectName
+	}
+	if m.manualScrollbackPause {
+		title += " (HIST PAUSED)"
 	}
 
 	if m.focused {
@@ -505,9 +533,16 @@ func (m *Model) appendScrollback(data []byte) {
 		drop := len(m.scrollback) - maxScrollback
 		m.scrollback = m.scrollback[drop:]
 	}
+	// Smart Scroll Snap:
+	// If we are very close to the bottom (e.g. < 5 lines), assume the user wants to see new content
+	// and snap to bottom (offset=0). Otherwise, maintain the current scroll position.
 	if m.scrollOffset > 0 {
-		m.scrollOffset += linesAdded
-		m.clampScrollOffset()
+		if m.scrollOffset < 5 {
+			m.scrollOffset = 0
+		} else {
+			m.scrollOffset += linesAdded
+			m.clampScrollOffset()
+		}
 	}
 }
 
@@ -688,4 +723,56 @@ func ansiColorCode(fg bool, c int) int {
 		return 90 + (c - 8)
 	}
 	return 100 + (c - 8)
+}
+
+// GetPlainText returns the pure text content of the terminal (scrollback + screen).
+// It strips all styles and returns exactly what the user sees, effectively "snapshotting" the terminal.
+func (m Model) GetPlainText() string {
+	var b strings.Builder
+
+	// 1. Add Scrollback (already stripped of ANSI by appendScrollback)
+	for _, line := range m.scrollback {
+		if strings.TrimSpace(line) != "" {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+
+	// 2. Add Screen Content
+	// Need to lock terminal for reading cells
+	if m.term != nil {
+		// Note: We can't safely lock m.term here because it's embedded in the struct value receiver 'm'
+		// but vt10x.Terminal is an interface usually pointing to a pointer.
+		// However, standard read doesn't always expose Lock.
+		// Let's rely on the fact we are in the Update loop which is generally single-threaded for UI access.
+		
+		rows := m.innerHeight
+		cols := m.innerWidth
+		
+		for y := 0; y < rows; y++ {
+			var lineBuilder strings.Builder
+			isEmpty := true
+			for x := 0; x < cols; x++ {
+				cell := m.term.Cell(x, y)
+				if cell.Char != 0 && cell.Char != ' ' {
+					isEmpty = false
+				}
+				// Append char even if space, to maintain layout, but we'll trim right later
+				if cell.Char == 0 {
+					lineBuilder.WriteRune(' ')
+				} else {
+					lineBuilder.WriteRune(cell.Char)
+				}
+			}
+			
+			// Trim trailing spaces from the line
+			lineStr := strings.TrimRight(lineBuilder.String(), " ")
+			if !isEmpty && lineStr != "" {
+				b.WriteString(lineStr)
+				b.WriteByte('\n')
+			}
+		}
+	}
+
+	return b.String()
 }

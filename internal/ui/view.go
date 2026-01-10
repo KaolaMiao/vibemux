@@ -8,7 +8,17 @@ import (
 )
 
 // View renders the entire application.
-func (a App) View() string {
+func (a App) View() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = lipgloss.NewStyle().
+				Foreground(styles.Danger).
+				Bold(true).
+				Render(fmt.Sprintf("PANIC IN VIEW RENDER: %v", r))
+		}
+	}()
+
+
 	if a.quitting {
 		// Fancy goodbye message
 		bye := lipgloss.NewStyle().
@@ -129,7 +139,15 @@ func (a App) renderTerminalGrid(width, height int) string {
 			if c < len(colWidths) {
 				cellWidth = colWidths[c]
 			}
-			focused := a.focus == FocusTerminal && cellIndex == a.activePane
+			focused := false
+			if a.focus == FocusTerminal {
+				// Only highlight all terminals if in TERM mode AND BCAST mode
+				if a.inputMode == InputModeTerminal && a.dispatchMode == DispatchModeBroadcast {
+					focused = true
+				} else {
+					focused = cellIndex == a.activePane
+				}
+			}
 			if cellIndex < len(ids) {
 				if inst, ok := a.terminals[ids[cellIndex]]; ok {
 					inst.Terminal.SetFocused(focused)
@@ -256,6 +274,14 @@ func (a App) renderWithDialog(_ string) string {
 		dialogView = a.settingsDialog.View()
 	case DialogCommand:
 		dialogView = a.commandDialog.View()
+	case DialogChainPreview:
+		dialogView = a.chainDialog.View()
+	case DialogAssignRoles:
+		dialogView = a.roleDialog.View()
+	case DialogAssignRolesFile:
+		dialogView = a.organizerDialog.View()
+	case DialogFilePreview:
+		dialogView = a.filePreview.View()
 	}
 
 	// Overlay dialog in center

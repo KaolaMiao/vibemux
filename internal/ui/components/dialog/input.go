@@ -423,6 +423,7 @@ func (d *InputDialog) Reset() {
 	}
 }
 
+// SetFieldOptions logic helper
 func (d *InputDialog) SetFieldOptions(index int, options []string) {
 	if index < 0 || index >= len(d.inputs) {
 		return

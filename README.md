@@ -42,7 +42,43 @@ VibeMux enables developers to:
 - Go 1.25 or higher (for building from source)
 - Claude Code CLI (`claude`) or Codex CLI (`codex`) installed
   - Claude Code: `npm install -g @anthropic-ai/claude-code`
-- macOS / Linux (Windows supported via WSL; native Windows is experimental)
+- macOS / Linux / **Windows (Native support in active development)**
+
+## Windows Development Status
+
+> [!NOTE]
+> VibeMux is actively being developed and optimized for **native Windows** support. The following improvements have been made:
+
+### ✅ Completed Optimizations
+
+- **Performance Enhancements**
+  - Optimized `RingBuffer` write operations for better throughput under high output scenarios
+  - Improved terminal output buffering to handle rapid TUI refresh cycles (e.g., Claude Code's interactive UI)
+  
+- **Stability Improvements**
+  - Enhanced PTY session error handling and channel management
+  - Fixed race conditions in terminal output processing
+  - Improved scrollback mechanism to handle TUI application "ghost frames"
+
+- **Windows-Specific Features**
+  - PowerShell integration for native Windows terminal support
+  - Windows path handling (supports long Chinese paths)
+  - IME (Input Method Editor) support for Chinese input
+
+### 🚧 Known Limitations
+
+- PTY emulation on Windows has some quirks compared to Unix systems
+- Some ANSI escape sequences may render differently
+- Terminal scrollback with nested TUI applications (like Claude Code) may show rendering artifacts
+
+### 🎯 Planned Improvements
+
+- [ ] Further optimize terminal rendering performance
+- [ ] Enhanced Windows terminal compatibility
+- [ ] Improved error messages for Windows-specific issues
+- [ ] Native Windows installer/package
+
+For detailed technical optimizations and implementation notes, see development logs in the project repository.
 
 ## Installation
 
@@ -198,7 +234,43 @@ VibeMux 让开发者能够：
 - Go 1.25 或更高版本（仅源码编译需要）
 - 已安装 Claude Code CLI (`claude`) 或 Codex CLI (`codex`)
   - Claude Code：`npm install -g @anthropic-ai/claude-code`
-- macOS / Linux（Windows 建议 WSL；原生 Windows 为实验性）
+- macOS / Linux / **Windows（原生支持开发中）**
+
+## Windows 开发状态
+
+> [!NOTE]
+> VibeMux 正在积极开发并优化**原生 Windows** 支持。以下是已完成的改进：
+
+### ✅ 已完成优化
+
+- **性能增强**
+  - 优化了 `RingBuffer` 写入操作，提升高输出场景下的吞吐量
+  - 改进了终端输出缓冲，以处理快速 TUI 刷新周期（如 Claude Code 的交互式界面）
+  
+- **稳定性提升**
+  - 增强了 PTY 会话错误处理和通道管理
+  - 修复了终端输出处理中的竞态条件
+  - 改进了滚动回看机制，处理 TUI 应用的"幽灵帧"问题
+
+- **Windows 定制功能**
+  - PowerShell 集成，支持原生 Windows 终端
+  - Windows 路径处理（支持中文长路径）
+  - IME（输入法编辑器）支持，完善中文输入体验
+
+### 🚧 已知限制
+
+- Windows 上的 PTY 模拟相比 Unix 系统存在一些差异
+- 部分 ANSI 转义序列可能渲染效果不同
+- 嵌套 TUI 应用（如 Claude Code）的终端回看可能出现渲染残影
+
+### 🎯 计划改进
+
+- [ ] 进一步优化终端渲染性能
+- [ ] 增强 Windows 终端兼容性
+- [ ] 改进 Windows 特定问题的错误提示
+- [ ] 提供原生 Windows 安装包
+
+详细的技术优化和实现说明请参考项目仓库中的开发日志。
 
 ## 安装
 

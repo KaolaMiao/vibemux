@@ -2,14 +2,31 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lazyvibe/vibemux/internal/model"
+	"github.com/lazyvibe/vibemux/internal/runtime"
+	"github.com/lazyvibe/vibemux/internal/ui/components/chaindialog"
+	"github.com/lazyvibe/vibemux/internal/ui/components/filepreview"
 )
+
+// AutoTurnMsg indicates it's time to rotate to the next agent.
+type AutoTurnMsg struct{}
+
+// AutoTurnCountdownMsg ticks the countdown.
+type AutoTurnCountdownMsg int
 
 // Update handles all messages for the application.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			a.statusBar.SetMessage(fmt.Sprintf("Panic recovered: %v", r), true)
+			// Log panic to file if possible, or just print to stderr
+		}
+	}()
+
 	var cmds []tea.Cmd
 
 	// If a dialog is open, only intercept key input; allow other messages through.
@@ -25,8 +42,33 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyMsg:
-		if key.Matches(msg, a.keys.ModeToggle) {
+		// DEBUG: Log key presses to debug.log to diagnose F12 issues
+		/*
+		f, _ := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if f != nil {
+			fmt.Fprintf(f, "Key: %q, Type: %v, Alt: %v\n", msg.String(), msg.Type, msg.Alt)
+			f.Close()
+		}
+		*/
+
+		// F12: Mode toggle - MUST work in ALL modes (Solo, Broadcast, Chain)
+		// Use multiple detection methods for maximum compatibility
+		keyStr := msg.String()
+		isF12 := key.Matches(msg, a.keys.ModeToggle) ||
+			keyStr == "f12" ||
+			keyStr == "F12" ||
+			msg.Type == tea.KeyF12
+		
+		// Fallback: Ctrl+E to Exit terminal mode (if F12 fails)
+		isExit := keyStr == "ctrl+e"
+
+		if isF12 || isExit {
 			a.toggleInputMode()
+			return a, nil
+		}
+		
+		if key.Matches(msg, a.keys.DispatchToggle) {
+			a.cycleDispatchMode()
 			return a, nil
 		}
 
@@ -51,9 +93,38 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 
+		// Ctrl+L: Manual screen refresh to fix rendering artifacts
+		if msg.String() == "ctrl+l" {
+			return a, tea.ClearScreen
+		}
+
 		if key.Matches(msg, a.keys.Profiles) {
 			a.showProfileManager()
 			return a, nil
+		}
+
+		// Global shortcuts (ONLY when NOT in terminal input mode)
+		if a.inputMode != InputModeTerminal {
+			if key.Matches(msg, a.keys.AutoTurnToggle) {
+				return a, a.toggleAutoTurn()
+			}
+			
+			if key.Matches(msg, a.keys.NextTurn) {
+				// Manual override cancels countdown
+				a.autoTurnCountdown = 0
+				a.updateTurnStatus()
+				return a, a.sendNextTurn()
+			}
+	
+			if key.Matches(msg, a.keys.FilePreview) {
+				// Toggle file preview
+				if a.dialogMode == DialogFilePreview {
+					a.hideDialog()
+				} else {
+					a.showFilePreview()
+				}
+				return a, nil
+			}
 		}
 
 		if a.focus == FocusTerminal {
@@ -165,6 +236,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update session tabs
 		a.sessionTabs.SetTabStatus(msg.ProjectID, model.SessionStatusRunning)
 		a.statusBar.SetMessage("Session started", false)
+		
+		// Force global resize to update all PTYs with new grid dimensions
+		a.SetSize(a.width, a.height)
 		// Start listening for output
 		return a, a.waitForOutput(msg.ProjectID)
 
@@ -188,6 +262,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					session.Write([]byte(reply))
 				}
 			}
+			
+			// NOTE: Auto-turn countdown removed - using manual Alt+N control now
 		}
 		// Mark tab as having new content if not active
 		if msg.ProjectID != a.activeTermID {
@@ -211,8 +287,57 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case error:
+		return a, nil
+		
+	case AutoTurnCountdownMsg:
+		// Stale check: if logic changed since tick started (e.g. manual override), abort
+		count := int(msg)
+		if !a.autoTurnEnabled || a.autoTurnCountdown != count {
+			return a, nil
+		}
+		
+		if count <= 0 {
+			a.autoTurnCountdown = 0
+			a.updateTurnStatus()
+			return a, func() tea.Msg { return AutoTurnMsg{} }
+		}
+		
+		// Decrement
+		a.autoTurnCountdown = count - 1
+		a.updateTurnStatus()
+		
+		// Schedule next tick
+		return a, tea.Tick(time.Second, func(t time.Time) tea.Msg {
+			return AutoTurnCountdownMsg(count - 1)
+		})
+
+	case filepreview.TickMsg:
+		// Forward tick to file preview if active
+		if a.dialogMode == DialogFilePreview {
+			var cmd tea.Cmd
+			a.filePreview, cmd = a.filePreview.Update(msg)
+			return a, cmd
+		}
+		return a, nil
+
 	case ErrorMsg:
 		a.statusBar.SetMessage("Error: "+msg.Err.Error(), true)
+		return a, nil
+
+	case AutoTurnMsg:
+		if a.autoTurnEnabled {
+			return a, a.sendNextTurn()
+		}
+		return a, nil
+
+	case AutoTurnTimeoutMsg:
+		// Check if we are still on the same turn (time matches)
+		if a.autoTurnEnabled && a.activeTermID == msg.TargetID && a.currentTurnStartTime.Equal(msg.StartTime) {
+			a.autoTurnEnabled = false
+			a.updateTurnStatus()
+			a.statusBar.SetMessage("Auto-Turn timed out. Switched to Manual Mode.", true)
+		}
 		return a, nil
 
 	case IMEFlushMsg:
@@ -359,6 +484,65 @@ func (a App) handleDialogUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.commandDialog.IsCancelled() {
 			a.hideDialog()
 			return a, nil
+		}
+		return a, cmd
+	case DialogChainPreview:
+		var cmd tea.Cmd
+		a.chainDialog, cmd = a.chainDialog.Update(msg)
+		if a.chainDialog.IsClosed() {
+			if a.chainDialog.IsCleared() && a.chainContext != nil {
+				// Clear the chain context
+				a.chainContext.Chain = nil
+				_ = a.chainContext.Save()
+				a.statusBar.SetMessage("Chain context cleared", false)
+			}
+			a.hideDialog()
+			return a, nil
+		}
+		return a, cmd
+	case DialogAssignRoles:
+		var cmd tea.Cmd
+		a.roleDialog, cmd = a.roleDialog.Update(msg)
+		if a.roleDialog.IsSubmitted() {
+			cmds := a.assignRolesToTerminals()
+			a.hideDialog()
+			a.statusBar.SetMessage("Roles and prompts sent to terminals", false)
+			return a, tea.Batch(cmds...)
+		}
+		if a.roleDialog.IsCancelled() {
+			a.hideDialog()
+			return a, nil
+		}
+		return a, cmd
+		return a, cmd
+	case DialogAssignRolesFile:
+		var cmd tea.Cmd
+		a.organizerDialog, cmd = a.organizerDialog.Update(msg)
+		if a.organizerDialog.IsSubmitted() {
+			cmds := a.assignRolesToTerminalsFile()
+			a.hideDialog()
+			a.statusBar.SetMessage("File-based roles initiated", false)
+			return a, tea.Batch(cmds...)
+		}
+		if a.organizerDialog.IsCancelled() {
+			a.hideDialog()
+			return a, nil
+		}
+		return a, cmd
+	case DialogFilePreview:
+		var cmd tea.Cmd
+		a.filePreview, cmd = a.filePreview.Update(msg)
+		if !a.filePreview.IsActive() {
+			a.hideDialog()
+			return a, nil
+		}
+		// Allow Esc to close
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if keyMsg.String() == "esc" || keyMsg.String() == "q" {
+				a.filePreview.Deactivate()
+				a.hideDialog()
+				return a, nil
+			}
 		}
 		return a, cmd
 	}
@@ -576,6 +760,68 @@ func (a App) handleTerminalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Update IME buffer target
 			a.imeBuffer.SetTarget(a.activeTermID)
 
+			// Chain Mode Shortcuts
+			if a.dispatchMode == DispatchModeChain && a.chainContext != nil {
+				// Ctrl+S: Save Context
+				if msg.String() == "ctrl+s" {
+						// Check loop for TerminalInstance lookup instead of type assertion on session
+						// We need to access the UI model, not just the runtime session
+						var activeInst *TerminalInstance
+						if inst, ok := a.terminals[a.activeTermID]; ok {
+							activeInst = inst
+						}
+						
+						if activeInst != nil {
+							// Snapshot strategy: Get what is actually on screen + scrollback
+							// This avoids all the stream noise (spinners, intermediate frames, etc.)
+							rawContent := activeInst.Terminal.GetPlainText()
+							concl := runtime.ExtractConclusion(rawContent)
+							
+							agentName := activeInst.ProjectName
+							// Fallback if needed
+							if agentName == "" {
+								agentName = "Agent"
+							}
+							
+							if err := a.chainContext.AppendConclusion(agentName, concl); err == nil {
+								a.statusBar.SetMessage("Chain context saved", false)
+							} else {
+								a.statusBar.SetMessage("Failed to save chain: "+err.Error(), true)
+							}
+						} else {
+							a.statusBar.SetMessage("Error: Active terminal not found in UI model", true)
+						}
+					return a, nil
+				}
+				// Ctrl+O: Inject Context
+				if msg.String() == "ctrl+o" {
+					prompt := a.chainContext.FormatContext()
+					if sess, ok := a.engine.GetSession(a.activeTermID); ok {
+						sess.Write([]byte(prompt))
+						a.statusBar.SetMessage("Chain context injected", false)
+					}
+					return a, nil
+				}
+				// Ctrl+P: Preview Chain Context
+				if msg.String() == "ctrl+p" {
+					a.chainDialog = chaindialog.New(a.chainContext)
+					a.chainDialog.SetSize(a.width, a.height)
+					a.chainDialog.Reset()
+					a.dialogMode = DialogChainPreview
+					return a, nil
+				}
+				// Ctrl+R: Assign Roles
+				if key.Matches(msg, a.keys.AssignRoles) {
+					a.showRoleDialog()
+					return a, nil
+				}
+				// Ctrl+Shift+R: Assign Roles (File Mode)
+				if key.Matches(msg, a.keys.AssignRolesFile) {
+					a.showRoleDialogFile()
+					return a, nil
+				}
+			}
+
 			// Handle KeyRunes with IME buffering
 			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
 				output, cmd, shouldFlushFirst := a.imeBuffer.ProcessRunes(msg.Runes)
@@ -588,13 +834,19 @@ func (a App) handleTerminalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 
+
+
 				// Send immediate output if any
 				if len(output) > 0 {
 					// Apply Alt modifier if needed
 					if msg.Alt {
 						output = append([]byte{27}, output...)
 					}
-					session.Write(output)
+					if a.dispatchMode == DispatchModeBroadcast {
+						a.broadcastInput(output)
+					} else {
+						session.Write(output)
+					}
 				}
 
 				return a, cmd
@@ -602,7 +854,12 @@ func (a App) handleTerminalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			// For non-rune keys, flush IME buffer first then send the key
 			if a.imeBuffer.HasContent() {
-				session.Write(a.imeBuffer.Flush())
+				buffered := a.imeBuffer.Flush()
+				if a.dispatchMode == DispatchModeBroadcast {
+					a.broadcastInput(buffered)
+				} else {
+					session.Write(buffered)
+				}
 			}
 
 			// Handle special keys for local scrolling
@@ -654,7 +911,13 @@ func (a App) handleTerminalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Send key to PTY
 			input := keyToBytes(msg)
 			if len(input) > 0 {
-				session.Write(input)
+				if a.dispatchMode == DispatchModeBroadcast {
+					// 广播模式：发送到所有终端
+					a.broadcastInput(input)
+				} else {
+					// Solo 模式和 Chain 模式：只发送到当前活动终端
+					session.Write(input)
+				}
 				return a, nil
 			}
 		}

@@ -18,6 +18,7 @@ type Model struct {
 	keyMap       keys.KeyMap
 	sessionCount int
 	modeLabel    string
+	turnInfo     string
 }
 
 // New creates a new status bar component.
@@ -54,6 +55,11 @@ func (m *Model) SetModeLabel(label string) {
 	m.modeLabel = strings.ToUpper(strings.TrimSpace(label))
 }
 
+// SetTurnInfo sets the auto-turn status info.
+func (m *Model) SetTurnInfo(info string) {
+	m.turnInfo = info
+}
+
 // View renders the status bar.
 func (m Model) View() string {
 	// Brand
@@ -75,11 +81,19 @@ func (m Model) View() string {
 
 	// Build help text
 	helpItems := []string{}
-	if modeLabel == "TERM" {
-		helpItems = append(helpItems, m.renderKey("F12", "control"))
+	if strings.HasPrefix(modeLabel, "TERM") {
+		// In terminal input mode
+		helpItems = append(helpItems, m.renderKey("Ctrl+e", "control"))
+		helpItems = append(helpItems, m.renderKey("Alt+m", "mode"))
+		helpItems = append(helpItems, m.renderKey("Alt+s", "hist")) // toggle history recording
+		if strings.Contains(modeLabel, "BCAST") || strings.Contains(modeLabel, "CHAIN") {
+			helpItems = append(helpItems, m.renderKey("Typing", "broadcasts to all"))
+		}
 	} else {
+		// In control mode
 		helpItems = append(helpItems,
-			m.renderKey("F12", "term"),
+			m.renderKey("Ctrl+e", "term"),
+			m.renderKey("Alt+m", "mode"),
 			m.renderKey("Tab", "switch"),
 			m.renderKey("Enter", "run/term"),
 			m.renderKey("a", "add"),
@@ -88,7 +102,6 @@ func (m Model) View() string {
 			m.renderKey("x", "close"),
 			m.renderKey("←/→", "pane"),
 			m.renderKey("↑/↓", "pane"),
-			m.renderKey("Shift+↑/↓", "page"),
 			m.renderKey("q", "quit"),
 		)
 	}
@@ -137,6 +150,35 @@ func (m Model) View() string {
 		middleContent +
 		strings.Repeat(" ", rightPad) +
 		rightContent
+	
+	// Overlay Turn Info if present (right aligned before help)
+	if m.turnInfo != "" {
+		turnBadge := lipgloss.NewStyle().
+			Foreground(styles.Base).
+			Background(styles.Secondary).
+			Bold(true).
+			Padding(0, 1).
+			Render(m.turnInfo)
+		// Recalculate to inject it? Or just append to leftContent?
+		// Let's append to leftContent (after session info)
+		leftContent += " " + turnBadge
+		
+		// Re-calculate layout
+		leftWidth = lipgloss.Width(leftContent)
+		totalUsed = leftWidth + rightWidth + middleWidth
+		padding = m.width - totalUsed
+		if padding < 0 {
+			padding = 0
+		}
+		leftPad = padding / 2
+		rightPad = padding - leftPad
+		
+		content = leftContent +
+			strings.Repeat(" ", leftPad) +
+			middleContent +
+			strings.Repeat(" ", rightPad) +
+			rightContent
+	}
 
 	return lipgloss.NewStyle().
 		Background(styles.Mantle).

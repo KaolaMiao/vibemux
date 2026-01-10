@@ -29,6 +29,7 @@ type outputWatcher struct {
 	textTail         string
 	lastEvents       map[string]time.Time
 	pendingAutoReply string
+	pendingAutoTurn  bool
 }
 
 func newOutputWatcher() *outputWatcher {
@@ -60,6 +61,9 @@ func (w *outputWatcher) Process(project *model.Project, profile *model.Profile, 
 	if plain != "" {
 		plain = strings.ReplaceAll(plain, "\r", "\n")
 		combined := w.textTail + plain
+		
+		// NOTE: Auto-turn signal detection removed - using manual control now
+
 		w.textTail = trimTail(combined, textTailLimit)
 		lines := tailLines(combined, 12)
 		for _, line := range lines {
@@ -70,7 +74,7 @@ func (w *outputWatcher) Process(project *model.Project, profile *model.Profile, 
 			if shouldAutoApprove(profile) && w.pendingAutoReply == "" {
 				if reInputRequired.MatchString(line) && reCommandApproval.MatchString(line) {
 					if w.shouldAutoReply(line) {
-						w.pendingAutoReply = "y\n"
+						w.pendingAutoReply = "y\r"
 					}
 				}
 			}
@@ -159,6 +163,14 @@ func (w *outputWatcher) ConsumeAutoReply() string {
 	reply := w.pendingAutoReply
 	w.pendingAutoReply = ""
 	return reply
+}
+
+func (w *outputWatcher) ConsumeAutoTurnSignal() bool {
+	if w.pendingAutoTurn {
+		w.pendingAutoTurn = false
+		return true
+	}
+	return false
 }
 
 func appendEventIfNew(events []notify.Event, w *outputWatcher, ev notify.Event, project *model.Project, ts time.Time) []notify.Event {

@@ -34,18 +34,19 @@ type Session interface {
 
 // PTYSession implements Session using creack/pty.
 type PTYSession struct {
-	id      string
-	cmd     *exec.Cmd
-	pCmd    *pty.Cmd // Active PTY command
-	ptmx    pty.Pty
-	output  chan []byte
-	done    chan struct{}
-	status  model.SessionStatus
-	mu      sync.RWMutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	exitErr error
-	buffer  *RingBuffer // Output history buffer
+	id        string
+	cmd       *exec.Cmd
+	pCmd      *pty.Cmd // Active PTY command
+	ptmx      pty.Pty
+	output    chan []byte
+	done      chan struct{}
+	closeOnce sync.Once // 确保 done channel 只关闭一次，防止 panic
+	status    model.SessionStatus
+	mu        sync.RWMutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	exitErr   error
+	buffer    *RingBuffer // Output history buffer
 	initialRows uint16
 	initialCols uint16
 }
@@ -55,7 +56,7 @@ func NewPTYSession(id string, cmd *exec.Cmd) *PTYSession {
 	return &PTYSession{
 		id:          id,
 		cmd:         cmd,
-		output:      make(chan []byte, 256), // Buffered channel for output
+		output:      make(chan []byte, 512), // 缓冲通道，增大容量减少高输出时丢包
 		done:        make(chan struct{}),
 		status:      model.SessionStatusIdle,
 		buffer:      NewRingBuffer(50000), // ~50KB history
@@ -167,7 +168,8 @@ func formatCmd(cmd *exec.Cmd) string {
 	return ""
 }
 
-// readLoop continuously reads from PTY and sends to output channel.
+// readLoop 持续从 PTY 读取输出并发送到 output channel。
+// 使用非阻塞发送策略，高负载时丢弃旧数据以保持实时性。
 func (s *PTYSession) readLoop() {
 	buf := make([]byte, 4096)
 	for {
@@ -177,7 +179,7 @@ func (s *PTYSession) readLoop() {
 		default:
 			n, err := s.ptmx.Read(buf)
 			if err != nil {
-				// EOF or error - process likely ended
+				// PTY 读取错误，可能是 EOF（进程结束）或其他 I/O 错误
 				s.mu.Lock()
 				if s.status == model.SessionStatusRunning {
 					s.status = model.SessionStatusStopped
@@ -190,19 +192,29 @@ func (s *PTYSession) readLoop() {
 				data := make([]byte, n)
 				copy(data, buf[:n])
 
-				// Store in ring buffer for history
+				// 存储到环形缓冲区以保存历史记录
 				s.buffer.Write(data)
 
-				// Non-blocking send to output channel
+				// 非阻塞发送到 output channel
+				// 策略：优先保证最新数据，如果 channel 满了则丢弃最旧的数据
 				select {
 				case s.output <- data:
+					// 发送成功
 				default:
-					// Channel full, drop oldest and retry
+					// Channel 已满，尝试丢弃一个旧数据后重试
 					select {
 					case <-s.output:
+						// 成功丢弃一个旧数据
 					default:
+						// Channel 已空（可能同时被消费），继续尝试发送
 					}
-					s.output <- data
+					// 再次尝试非阻塞发送
+					select {
+					case s.output <- data:
+					default:
+						// 仍然失败，丢弃当前数据（极端情况）
+						// 数据已保存在 RingBuffer 中，不会完全丢失
+					}
 				}
 			}
 		}
@@ -222,7 +234,8 @@ func (s *PTYSession) waitLoop() {
 	}
 }
 
-// Stop terminates the PTY process.
+// Stop 终止 PTY 进程。
+// 使用 sync.Once 确保 done channel 只关闭一次，防止重复调用导致 panic。
 func (s *PTYSession) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -231,8 +244,10 @@ func (s *PTYSession) Stop() error {
 		return nil
 	}
 
-	// Signal done to readers
-	close(s.done)
+	// 使用 sync.Once 安全关闭 done channel
+	s.closeOnce.Do(func() {
+		close(s.done)
+	})
 
 	// Cancel context
 	if s.cancel != nil {
@@ -292,7 +307,17 @@ func (s *PTYSession) Resize(rows, cols uint16) error {
 
 	// return s.ptmx.Resize(int(cols), int(rows))
     // Note: pty.Resize takes (width, height) which corresponds to (cols, rows)
-    return s.ptmx.Resize(int(cols), int(rows))
+    if err := s.ptmx.Resize(int(cols), int(rows)); err != nil {
+        return err
+    }
+    
+    // Send ANSI escape sequence to force terminal redraw
+    // CSI 8 ; rows ; cols t = Resize window to rows x cols (xterm)
+    // Some terminals may ignore this, but sending it won't hurt.
+    // Also send a simple query that forces apps to update their size.
+    // We use DSR (Device Status Report, CSI 6 n) to prompt a response.
+    _, _ = s.ptmx.Write([]byte("\x1b[6n"))
+    return nil
 }
 
 // History returns the buffered output history.

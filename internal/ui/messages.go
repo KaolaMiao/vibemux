@@ -119,12 +119,37 @@ func LoadProfiles(loader func() ([]model.Profile, error)) tea.Cmd {
 }
 
 // WaitForOutput returns a command that waits for session output.
+// It implements "Dynamic Catch-up" by opportunistic batching:
+// If the channel has more data ready, it bundles it into a single message
+// to reduce Bubble Tea render cycles (which is the main bottleneck).
 func WaitForOutput(outputCh <-chan []byte, projectID string) tea.Cmd {
 	return func() tea.Msg {
+		// 1. Block wait for the first chunk (latency priority)
 		data, ok := <-outputCh
 		if !ok {
 			return SessionStoppedMsg{ProjectID: projectID}
 		}
+
+		// 2. Batching loop (throughput priority)
+		// If the consumer (UI) is slower than producer (PTY), the channel will fill up.
+		// We drain up to maxBatchSize to render fewer frames with more content.
+		const maxBatchSize = 32 * 1024 // 32KB batch limit
+		
+		for len(data) < maxBatchSize {
+			select {
+			case next, ok := <-outputCh:
+				if !ok {
+					// Channel closed, return what we have. 
+					// The next call to WaitForOutput (if any) or the logic above handles close state.
+					return SessionOutputMsg{ProjectID: projectID, Data: data}
+				}
+				data = append(data, next...)
+			default:
+				// No more data immediately available, send current batch
+				return SessionOutputMsg{ProjectID: projectID, Data: data}
+			}
+		}
+
 		return SessionOutputMsg{ProjectID: projectID, Data: data}
 	}
 }

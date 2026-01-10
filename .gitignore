@@ -1,2 +1,29 @@
+# macOS
 .DS_Store
-/bin
+
+# Build outputs
+/bin/
+*.exe
+*.out
+vibemux
+
+# Development environment
+.go_cache/
+.vibemux/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# AI context files (keep local, don't upload)
+.AGENT/
+
+# IDE configurations
+.vscode/
+.idea/
+*.iml
+
+# Go workspace
+go.work
+go.work.sum

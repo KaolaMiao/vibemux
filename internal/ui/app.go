@@ -3,8 +3,12 @@ package ui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+	"fmt"
+
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lazyvibe/vibemux/internal/app"
@@ -12,7 +16,10 @@ import (
 	"github.com/lazyvibe/vibemux/internal/notify"
 	"github.com/lazyvibe/vibemux/internal/runtime"
 	"github.com/lazyvibe/vibemux/internal/store"
+	"github.com/lazyvibe/vibemux/internal/ui/components/chaindialog"
+	"github.com/lazyvibe/vibemux/internal/ui/components/configdialog"
 	"github.com/lazyvibe/vibemux/internal/ui/components/dialog"
+	"github.com/lazyvibe/vibemux/internal/ui/components/filepreview"
 	profilelist "github.com/lazyvibe/vibemux/internal/ui/components/profile_list"
 	projectlist "github.com/lazyvibe/vibemux/internal/ui/components/project_list"
 	"github.com/lazyvibe/vibemux/internal/ui/components/sessiontabs"
@@ -40,6 +47,15 @@ const (
 	InputModeTerminal
 )
 
+// DispatchMode controls how input is dispatched to terminals.
+type DispatchMode int
+
+const (
+	DispatchModeSolo DispatchMode = iota
+	DispatchModeBroadcast
+	DispatchModeChain
+)
+
 const (
 	minAppWidth  = 40
 	minAppHeight = 10
@@ -55,6 +71,10 @@ const (
 	DialogEditProfile
 	DialogSettings
 	DialogCommand
+	DialogChainPreview
+	DialogAssignRoles
+	DialogAssignRolesFile
+	DialogFilePreview
 )
 
 // TerminalInstance holds data for a single terminal session.
@@ -78,6 +98,11 @@ type App struct {
 	profileDialog  dialog.InputDialog
 	settingsDialog dialog.InputDialog
 	commandDialog  dialog.InputDialog
+	roleDialog     dialog.InputDialog
+	organizerDialog configdialog.Model // Separate complex dialog
+
+	chainDialog    chaindialog.Model
+	filePreview    filepreview.Model
 
 	// State
 	focus      FocusArea
@@ -89,16 +114,31 @@ type App struct {
 	activePane int
 	gridRows   int
 	gridCols   int
-	inputMode  InputMode
-	imeBuffer  *IMEBuffer // IME input buffer for Chinese input support
+	inputMode    InputMode
+	dispatchMode DispatchMode
+	imeBuffer    *IMEBuffer // IME input buffer for Chinese input support
 
 	// Data
 	projects      []model.Project
 	profiles      []model.Profile
 	profileEditID string
 
+	tempChainFile string
+
+	// Auto-Turn State
+	turnSequence      []string
+	currentSeqIndex   int
+	autoTurnEnabled   bool
+	autoTurnCountdown int // 5s countdown
+	turnTopic         string
+	turnFilename    string
+	currentTurnStartTime time.Time
+
 	configDir string
 	config    *app.Config
+
+	// Chain Mode
+	chainContext *runtime.ChainContext
 
 	// Dependencies
 	store          *store.JSONStore
@@ -118,6 +158,7 @@ func New(s *store.JSONStore, e *runtime.DefaultEngine, cfg *app.Config, configDi
 		projectList:    projectlist.New(),
 		profileList:    profilelist.New(),
 		sessionTabs:    sessiontabs.New(),
+		filePreview:    filepreview.New(),
 		terminals:      make(map[string]*TerminalInstance),
 		outputWatchers: make(map[string]*outputWatcher),
 		statusBar:      status,
@@ -139,6 +180,13 @@ func New(s *store.JSONStore, e *runtime.DefaultEngine, cfg *app.Config, configDi
 		imeBuffer:  NewIMEBuffer(),
 		configDir:  configDir,
 		config:     cfg,
+		// Initialize with a default chain session
+		chainContext: func() *runtime.ChainContext {
+			id := fmt.Sprintf("%d", time.Now().Unix())
+			dir := filepath.Join(configDir, "chain")
+			ctx, _ := runtime.NewChainContext(id, "Chain Session "+id, dir)
+			return ctx
+		}(),
 	}
 }
 
@@ -335,6 +383,13 @@ func (a *App) SetSize(width, height int) {
 		inst.Terminal.SetSize(colWidths[col], rowHeights[row])
 		if session, ok := a.engine.GetSession(id); ok && session.Status() == model.SessionStatusRunning {
 			cols, rows := inst.Terminal.PTYSize()
+			// Enforce minimum PTY size to prevent CLI tool crashes/OOM
+			if cols < 8 {
+				cols = 8
+			}
+			if rows < 2 {
+				rows = 2
+			}
 			if cols > 0 && rows > 0 {
 				_ = session.Resize(uint16(rows), uint16(cols))
 			}
@@ -577,7 +632,15 @@ func (a *App) canOpenPane(projectID string) bool {
 func (a *App) updateFocusStyles() {
 	a.projectList.SetFocused(a.focus == FocusProjects)
 	for id, inst := range a.terminals {
-		inst.Terminal.SetFocused(a.focus == FocusTerminal && id == a.activeTermID)
+		isFocused := false
+		if a.focus == FocusTerminal {
+			if a.dispatchMode == DispatchModeBroadcast || a.dispatchMode == DispatchModeChain {
+				isFocused = true
+			} else {
+				isFocused = id == a.activeTermID
+			}
+		}
+		inst.Terminal.SetFocused(isFocused)
 	}
 	a.statusBar.SetModeLabel(a.inputModeLabel())
 }
@@ -642,10 +705,24 @@ func (a *App) cycleFocusReverse() {
 }
 
 func (a *App) inputModeLabel() string {
+	var inputLabel string
 	if a.inputMode == InputModeTerminal {
-		return "TERM"
+		inputLabel = "TERM"
+	} else {
+		inputLabel = "CTRL"
 	}
-	return "CTRL"
+
+	var dispatchLabel string
+	switch a.dispatchMode {
+	case DispatchModeBroadcast:
+		dispatchLabel = "BCAST"
+	case DispatchModeChain:
+		dispatchLabel = "CHAIN"
+	default:
+		dispatchLabel = "SOLO"
+	}
+
+	return inputLabel + "|" + dispatchLabel
 }
 
 func (a *App) enterTerminalMode() {
@@ -667,6 +744,8 @@ func (a *App) enterControlMode() {
 	a.inputMode = InputModeControl
 	a.updateFocusStyles()
 }
+
+
 
 func (a *App) toggleInputMode() {
 	if a.inputMode == InputModeTerminal {
@@ -737,13 +816,26 @@ func (a *App) showProfileManager() {
 func (a *App) showSettingsDialog() {
 	rows := strconv.Itoa(a.gridRows)
 	cols := strconv.Itoa(a.gridCols)
-	value := rows + "x" + cols
-	a.settingsDialog = dialog.NewInputDialog("System Settings", []dialog.InputField{
-		{Label: "Grid Max (4/6/9 or 2x2/2x3/3x3)", Placeholder: "4/6/9", Value: value},
+	
+	a.settingsDialog = dialog.NewInputDialog("Settings", []dialog.InputField{
+		{Label: "Grid Size (e.g. 2x2, 3x3, 4, 6)", Placeholder: "2x2", Value: rows+"x"+cols},
 	})
 	a.settingsDialog.SetSize(a.width, a.height)
 	a.dialogMode = DialogSettings
 }
+
+
+func (a *App) showFilePreview() {
+	if a.turnFilename == "" {
+		a.statusBar.SetMessage("No active organizer file to preview", true)
+		return
+	}
+	
+	a.filePreview.SetFile(a.turnFilename)
+	a.filePreview.SetSize(a.width, a.height)
+	a.dialogMode = DialogFilePreview
+}
+
 
 func (a *App) showCommandDialog() {
 	a.commandDialog = dialog.NewInputDialog("Command", []dialog.InputField{

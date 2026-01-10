@@ -16,16 +16,26 @@ type KeyMap struct {
 	Delete     key.Binding
 	Add        key.Binding
 	Profiles   key.Binding
-	Help       key.Binding
-	ModeToggle key.Binding
-	Quit       key.Binding
-	Close      key.Binding
+	Help           key.Binding
+	ModeToggle     key.Binding
+	DispatchToggle key.Binding
+	Quit           key.Binding
+	Close          key.Binding
 
 	// Terminal
 	PaneLeft  key.Binding
 	PaneRight key.Binding
 	PaneUp    key.Binding
 	PaneDown  key.Binding
+	
+	// Chain Mode
+	AssignRoles     key.Binding
+	AssignRolesFile key.Binding
+	
+	// Auto-Turn & Preview
+	NextTurn       key.Binding
+	AutoTurnToggle key.Binding
+	FilePreview    key.Binding
 }
 
 // DefaultKeyMap returns the default keyboard shortcuts.
@@ -68,8 +78,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("?", "help"),
 		),
 		ModeToggle: key.NewBinding(
-			key.WithKeys("f12"),
-			key.WithHelp("f12", "mode"),
+			key.WithKeys("f12", "ctrl+e"),
+			key.WithHelp("F12/Ctrl+E", "term/ctrl"),
+		),
+		DispatchToggle: key.NewBinding(
+			key.WithKeys("alt+m"),
+			key.WithHelp("Alt+m", "dispatch"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),
@@ -94,6 +108,26 @@ func DefaultKeyMap() KeyMap {
 		PaneDown: key.NewBinding(
 			key.WithKeys("down", "j"),
 			key.WithHelp("↓/j", "pane down"),
+		),
+		AssignRoles: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("Ctrl+R", "assign roles"),
+		),
+		AssignRolesFile: key.NewBinding(
+			key.WithKeys("alt+f"),
+			key.WithHelp("Alt+F", "assign roles (file)"),
+		),
+		NextTurn: key.NewBinding(
+			key.WithKeys("alt+n"),
+			key.WithHelp("Alt+N", "next turn"),
+		),
+		AutoTurnToggle: key.NewBinding(
+			key.WithKeys("alt+a"),
+			key.WithHelp("Alt+A", "auto-turn on/off"),
+		),
+		FilePreview: key.NewBinding(
+			key.WithKeys("alt+v"),
+			key.WithHelp("Alt+V", "file preview"),
 		),
 	}
 }
